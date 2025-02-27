@@ -1,0 +1,269 @@
+volumes:
+  n8n_storage:
+  postgres_storage:
+  ollama_storage:
+  qdrant_storage:
+  nginx_logs:
+
+networks:
+  default:
+  lab:
+    external: true
+    name: hosted-n8n_lab
+
+x-n8n: &service-n8n
+  image: n8nio/n8n:latest
+  networks: ['lab']
+  environment:
+    - DB_TYPE=postgresdb
+    - DB_POSTGRESDB_HOST=postgres
+    - DB_POSTGRESDB_USER=${POSTGRES_USER}
+    - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+    - N8N_DIAGNOSTICS_ENABLED=true
+    - N8N_PERSONALIZATION_ENABLED=true
+    - N8N_RUNNERS_ENABLED=true
+    - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+    - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+    - N8N_USER_MANAGEMENT_JWT_SECRET=${N8N_USER_MANAGEMENT_JWT_SECRET}
+    - OLLAMA_HOST=ollama:11434
+    # LLM Provider Keys
+    - OPENAI_API_KEY=${OPENAI_API_KEY}
+    - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+
+x-ollama: &service-ollama
+  image: ollama/ollama:latest
+  container_name: ollama
+  networks: ['lab']
+  restart: unless-stopped
+  volumes:
+    - ollama_storage:/root/.ollama
+
+x-init-ollama: &init-ollama
+  image: ollama/ollama:latest
+  networks: ['lab']
+  container_name: ollama-pull-llama
+  volumes:
+    - ollama_storage:/root/.ollama
+  entrypoint: /bin/sh
+  environment:
+    - OLLAMA_HOST=ollama:11434
+  command:
+    - "-c"
+    - "sleep 3; ollama pull llama3.2"
+
+services:
+  core-nginx:
+    image: nginx:alpine
+    container_name: core-nginx
+    networks: ['lab']
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - /home/groot/nginx:/home/groot/nginx:ro
+      - /home/groot/logs/nginx:/var/log/nginx
+    profiles: ["core", "mcp", "n8n", "ai", "cpu", "gpu-nvidia", "gpu-amd"]
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  postgres:
+    image: postgres:16-alpine
+    hostname: postgres
+    networks: ['lab']
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER
+      - POSTGRES_PASSWORD
+      - POSTGRES_DB
+    volumes:
+      - postgres_storage:/var/lib/postgresql/data
+    profiles: ["core", "n8n", "mcp", "cpu", "gpu-nvidia", "gpu-amd"]
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -h localhost -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  n8n-import:
+    <<: *service-n8n
+    hostname: n8n-import
+    container_name: n8n-import
+    entrypoint: /bin/sh
+    command:
+      - "-c"
+      - "n8n import:credentials --separate --input=/backup/credentials && n8n import:workflow --separate --input=/backup/workflows"
+    volumes:
+      - ./n8n/backup:/backup
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ["n8n", "cpu", "gpu-nvidia", "gpu-amd"]
+
+  n8n:
+    <<: *service-n8n
+    hostname: n8n
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - 5678:5678
+    volumes:
+      - n8n_storage:/home/node/.n8n
+      - ./n8n/backup:/backup
+      - ./n8n/data/shared:/data/shared
+      - /home/groot/logs/n8n:/var/log/n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+      n8n-import:
+        condition: service_completed_successfully
+    profiles: ["n8n", "cpu", "gpu-nvidia", "gpu-amd"]
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "http://127.0.0.1:5678/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  qdrant:
+    image: qdrant/qdrant
+    hostname: qdrant
+    container_name: qdrant
+    networks: ['lab']
+    restart: unless-stopped
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    profiles: ["ai", "mcp", "cpu", "gpu-nvidia", "gpu-amd"]
+
+  ollama-cpu:
+    profiles: ["ai", "cpu"]
+    <<: *service-ollama
+
+  ollama-gpu:
+    profiles: ["ai", "gpu-nvidia"]
+    <<: *service-ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-gpu-amd:
+    profiles: ["ai", "gpu-amd"]
+    <<: *service-ollama
+    image: ollama/ollama:rocm
+    devices:
+      - "/dev/kfd"
+      - "/dev/dri"
+
+  ollama-pull-llama-cpu:
+    profiles: ["ai", "cpu"]
+    <<: *init-ollama
+    depends_on:
+      - ollama-cpu
+
+  ollama-pull-llama-gpu:
+    profiles: ["ai", "gpu-nvidia"]
+    <<: *init-ollama
+    depends_on:
+      - ollama-gpu
+
+  ollama-pull-llama-gpu-amd:
+    profiles: ["ai", "gpu-amd"]
+    <<: *init-ollama
+    image: ollama/ollama:rocm
+    depends_on:
+     - ollama-gpu-amd
+
+  crawl4ai:
+    build:
+      context: ./crawl4ai
+      dockerfile: Dockerfile
+    image: crawl4ai:latest
+    hostname: crawl4ai
+    container_name: crawl4ai
+    networks: ['lab']
+    restart: unless-stopped
+    ports:
+      - "11235:11235"
+    volumes:
+      - ./shared:/data/shared
+    environment:
+      - CRAWL4AI_API_TOKEN=${CRAWL4AI_API_TOKEN}
+      - MAX_CONCURRENT_TASKS=5
+      # Dependencies
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+      - NVIDIA_VISIBLE_DEVICES=all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    depends_on:
+      - qdrant
+      - ollama-gpu
+    profiles: ["utility", "gpu-nvidia"]
+
+
+#####################
+# MCP Server Configs
+#####################
+
+# MCP server using official images
+# Add these services to your existing docker-compose.yml
+
+  mcp-memory:
+    build: ./mcp/memory
+    container_name: mcp-memory
+    networks: ['lab']
+    restart: unless-stopped
+    ports:
+      - "8082:8080"
+    volumes:
+      - ./mcp/logs:/logs
+      - ./mcp/memory/data:/data
+    environment:
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep node | grep -v grep || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    depends_on:
+      - qdrant
+    profiles: ["mcp", "cpu", "gpu-nvidia", "gpu-amd"]
+
+  mcp-seqthinking:
+    image: mcp/sequentialthinking:latest
+    container_name: mcp-seqthinking
+    networks: ['lab']
+    restart: unless-stopped
+    ports:
+      - "8083:8080"
+    volumes:
+      - ./mcp/logs:/logs
+      - ./mcp/seqthinking/data:/data
+    environment:
+      - OLLAMA_HOST=ollama
+      - OLLAMA_PORT=11434
+    depends_on:
+      - ollama-gpu
+    profiles: ["mcp", "gpu-nvidia"]
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep python | grep -v grep || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
