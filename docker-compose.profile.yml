@@ -75,10 +75,15 @@ services:
     hostname: postgres
     networks: ['lab']
     restart: unless-stopped
+    command: 
+      - "postgres"
+      - "-c"
+      - "data_directory=/var/lib/postgresql/data/pgdata"
     environment:
       - POSTGRES_USER
       - POSTGRES_PASSWORD
       - POSTGRES_DB
+      - PGDATA=/var/lib/postgresql/data/pgdata
     volumes:
       - postgres_storage:/var/lib/postgresql/data
     profiles: ["core", "n8n", "mcp", "cpu", "gpu-nvidia", "gpu-amd"]
@@ -134,6 +139,8 @@ services:
     container_name: qdrant
     networks: ['lab']
     restart: unless-stopped
+    ports:
+      - 6333:6333
     volumes:
       - qdrant_storage:/qdrant/storage
     profiles: ["ai", "mcp", "cpu", "gpu-nvidia", "gpu-amd"]

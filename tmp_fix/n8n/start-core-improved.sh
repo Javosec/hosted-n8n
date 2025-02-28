@@ -10,6 +10,7 @@ echo "Starting core infrastructure services..."
 echo "Setting up nginx configuration directories..."
 mkdir -p /home/groot/nginx/html
 mkdir -p /home/groot/nginx/sites-enabled
+mkdir -p /home/groot/nginx/sites-available
 
 # Create a simple maintenance page if it doesn't exist
 if [ ! -f "/home/groot/nginx/html/maintenance.html" ]; then
@@ -38,7 +39,7 @@ fi
 
 # Start with a minimal configuration to ensure nginx can start
 echo "Setting up minimal nginx configuration..."
-cp -f /home/groot/Github/hosted-n8n/tmp_fix/n8n/minimal.conf /home/groot/nginx/sites-enabled/default.conf
+cp -f /home/groot/Github/hosted-n8n/tmp_fix/n8n/default.conf /home/groot/nginx/sites-enabled/default.conf
 
 # Remove any potentially problematic configuration files
 echo "Removing potentially problematic nginx configuration files..."
@@ -69,9 +70,18 @@ fi
 echo "Starting nginx with minimal configuration..."
 docker compose -f /home/groot/Github/hosted-n8n/docker-compose.profile.yml -p core --profile core up -d core-nginx
 
+# Wait for nginx to start
+echo "Waiting for nginx to start..."
+sleep 3
+
+# Fix nginx configuration paths
+echo "Fixing nginx configuration paths..."
+docker exec -it core-nginx mkdir -p /etc/nginx/sites-enabled
+docker exec -it core-nginx ln -sf /home/groot/nginx/sites-enabled/* /etc/nginx/sites-enabled/
+docker exec -it core-nginx nginx -s reload
+
 # Check if nginx started successfully
 echo "Checking nginx status..."
-sleep 3
 if docker ps | grep -q "core-nginx" && ! docker ps | grep -q "core-nginx.*Restarting"; then
   echo "Nginx started successfully!"
 else

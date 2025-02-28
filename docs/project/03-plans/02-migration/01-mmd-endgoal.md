@@ -175,7 +175,7 @@ sequenceDiagram
 
     User->>Start: run start-core.sh
     Start->>Core: Start postgres (core-postgres-1)
-    Start->>Core: Start nginx (nginx-proxy)
+    Start->>Core: Start nginx (core-nginx)
     Note over Core: Core services should run independently
     
     User->>Start: run start-n8n.sh
@@ -185,7 +185,14 @@ sequenceDiagram
     Start->>N8N: Start n8n
     Start->>Nginx: Create symlink for n8n.conf
     Start->>Core: Restart nginx-proxy
-    Note over Core,N8N: nginx-proxy fails if n8n.conf references unavailable services
+        
+    User->>Start: run start-ai.sh
+    Start->>Core: Check if core services are running
+    Core-->>Start: Core services status
+    Start->>AI: Start qdrant
+    Start->>AI: Start ollama
+    Start->>Nginx: Create symlink for qdrant.conf, ollama.conf
+    Start->>Core: Restart nginx-proxy
     
     User->>Start: run start-mcp.sh
     Start->>Core: Check if core services are running
@@ -193,14 +200,6 @@ sequenceDiagram
     Start->>MCP: Start mcp-memory
     Start->>MCP: Start mcp-seqthinking
     Start->>Nginx: Create symlink for mcp.conf
-    Start->>Core: Restart nginx-proxy
-    
-    User->>Start: run start-ai.sh
-    Start->>Core: Check if core services are running
-    Core-->>Start: Core services status
-    Start->>AI: Start qdrant
-    Start->>AI: Start ollama
-    Start->>Nginx: Create symlink for qdrant.conf, ollama.conf
     Start->>Core: Restart nginx-proxy
 ```
 
@@ -214,19 +213,27 @@ config:
   look: handDrawn
 ---
 flowchart TD
- subgraph subGraph0["Current Issue"]
+ subgraph subGraph1["Current State"]
+        target_nginx["core-nginx\n(stable)"]
+        target_n8n["n8n container\n(running)"]
+        target_postgres["core-postgres-1\n(shared)"]
+        target_n8n_conf["n8n.conf\n(resilient to missing services)"]
+
+ subgraph subGraph0["Past Issue"]
         current_nginx["nginx-proxy\n(restarting loop)"]
         current_n8n["n8n container\n(running)"]
         current_postgres1["core-postgres-1\n(running)"]
         current_postgres2["n8n-postgres-1\n(duplicate)"]
         current_n8n_conf["n8n.conf\n(fails when n8n unavailable)"]
   end
+
  subgraph subGraph1["Target State"]
         target_nginx["nginx-proxy\n(stable)"]
         target_n8n["n8n container\n(running)"]
         target_postgres["core-postgres-1\n(shared)"]
         target_n8n_conf["n8n.conf\n(resilient to missing services)"]
   end
+  
     current_nginx -- depends on --> current_n8n
     current_nginx -- Can't load --> current_n8n_conf
     current_n8n -- connects to --> current_postgres2

@@ -5,7 +5,7 @@
 # in a project named "n8n" for better Docker UI organization.
 
 # Check if core services are running
-if ! docker ps | grep -q "core-nginx-1"; then
+if ! docker ps | grep -q "core-nginx"; then
   echo "Core nginx is not running. Starting core infrastructure..."
   ./scripts/start-core.sh
 fi
@@ -28,7 +28,7 @@ docker compose -f docker-compose.profile.yml -p n8n --profile n8n --profile $HW_
 if [ $? -eq 0 ]; then
   echo "Enabling nginx configuration for n8n..."
   # Create symbolic link for n8n.conf in sites-enabled
-  sudo ln -sf /home/groot/nginx/sites-available/n8n.conf /home/groot/nginx/sites-enabled/n8n.conf
+  ln -sf /home/groot/nginx/sites-available/n8n.conf /home/groot/nginx/sites-enabled/n8n.conf
   # Restart core nginx to apply the configuration
   if docker ps | grep -q "core-nginx-1"; then
     echo "Restarting core nginx to apply configuration..."
